@@ -56,6 +56,12 @@ class BookMyShowScraper:
         self.current_city = None
         self.current_movie = None
         self.current_date = None
+        self.extraction_stats = {
+            'total_shows': 0,
+            'unique_movies': set(),
+            'unique_theatres': set(),
+            'unique_dates': set(),
+        }
         
     def start(self):
         """Start the Playwright browser."""
@@ -175,7 +181,7 @@ class BookMyShowScraper:
             movie_cards = self.page.locator('[data-testid="movieCard"]')
             card_count = movie_cards.count()
             
-            logger.info(f"Found {card_count} movie cards")
+            logger.info(f"Found {card_count} movie cards on page")
             
             for idx in range(min(card_count, 50)):  # Limit to prevent excessive processing
                 try:
@@ -194,25 +200,31 @@ class BookMyShowScraper:
                         continue
                     
                     self.current_movie = movie_name
+                    self.extraction_stats['unique_movies'].add(movie_name)
                     
                     # Extract shows within this movie card
                     show_elements = card.locator('[data-testid="showDetails"]')
                     show_count = show_elements.count()
                     
+                    logger.debug(f"Movie '{movie_name}': Found {show_count} shows")
+                    
                     for show_idx in range(show_count):
                         try:
                             show = show_elements.nth(show_idx)
+                            
+                            theatre_name = self._safe_extract_text(
+                                show.locator('[data-testid="theatreName"]')
+                            )
+                            show_time = self._safe_extract_text(
+                                show.locator('[data-testid="showTime"]')
+                            )
                             
                             show_data = {
                                 'movie': movie_name,
                                 'city': self.current_city or 'Not Detected',
                                 'date': self._extract_date(),
-                                'theatre_name': self._safe_extract_text(
-                                    show.locator('[data-testid="theatreName"]')
-                                ),
-                                'show_time': self._safe_extract_text(
-                                    show.locator('[data-testid="showTime"]')
-                                ),
+                                'theatre_name': theatre_name,
+                                'show_time': show_time,
                                 'availability': self._safe_extract_text(
                                     show.locator('[data-testid="availability"]')
                                 ),
@@ -223,9 +235,11 @@ class BookMyShowScraper:
                             }
                             
                             # Only add if we have essential data
-                            if show_data['theatre_name'] and show_data['show_time']:
+                            if theatre_name and show_time:
                                 shows.append(show_data)
-                                logger.debug(f"Extracted show: {show_data['theatre_name']} - {show_data['show_time']}")
+                                self.extraction_stats['unique_theatres'].add(theatre_name)
+                                self.extraction_stats['unique_dates'].add(show_data['date'])
+                                logger.debug(f"Extracted show: {theatre_name} - {show_time}")
                         
                         except Exception as e:
                             logger.debug(f"Error extracting individual show: {e}")
@@ -235,8 +249,12 @@ class BookMyShowScraper:
                     logger.debug(f"Error processing card {idx}: {e}")
                     continue
             
-            logger.info(f"Successfully extracted {len(shows)} show listings")
+            # Update stats
+            self.extraction_stats['total_shows'] = len(shows)
             self.collected_shows.extend(shows)
+            
+            logger.info(f"Successfully extracted {len(shows)} show listings")
+            
             return shows
         
         except Exception as e:
@@ -311,7 +329,6 @@ class BookMyShowScraper:
             self._format_excel(filepath)
             
             logger.info(f"Successfully saved to {filepath.absolute()}")
-            print(f"\n✓ Data saved to: {filepath.absolute()}")
             
         except Exception as e:
             logger.error(f"Error saving to Excel: {e}")
@@ -374,6 +391,26 @@ class BookMyShowScraper:
         except Exception as e:
             logger.warning(f"Could not format Excel file: {e}")
     
+    def print_summary(self):
+        """Print extraction statistics summary."""
+        print("\n" + "=" * 60)
+        print("SCRAPING SUMMARY")
+        print("=" * 60)
+        print(f"✓ Total Shows Collected:    {self.extraction_stats['total_shows']}")
+        print(f"✓ Unique Movies:            {len(self.extraction_stats['unique_movies'])}")
+        print(f"✓ Unique Theatres:          {len(self.extraction_stats['unique_theatres'])}")
+        print(f"✓ Unique Dates:             {len(self.extraction_stats['unique_dates'])}")
+        
+        if self.current_city:
+            print(f"✓ City:                     {self.current_city}")
+        
+        if self.extraction_stats['unique_movies']:
+            print(f"\nMovies Found:")
+            for movie in sorted(self.extraction_stats['unique_movies']):
+                print(f"  - {movie}")
+        
+        print("=" * 60 + "\n")
+    
     def run(self, output_filename: str = 'bookmyshow_listings.xlsx'):
         """
         Run the complete scraping workflow.
@@ -403,6 +440,9 @@ class BookMyShowScraper:
             
             # Save to Excel
             self.save_to_excel(output_filename)
+            
+            # Print summary
+            self.print_summary()
             
             # Keep browser open for review
             logger.info("Scraping complete. Browser will remain open for 30 seconds.")
@@ -438,7 +478,7 @@ def main():
         # Run scraping
         scraper.run()
         
-        print("\n✓ Scraping completed successfully!")
+        print("✓ Scraping completed successfully!")
         print("  Check 'bookmyshow_listings.xlsx' for the results.")
         
     except KeyboardInterrupt:
